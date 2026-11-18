@@ -20,7 +20,7 @@ Each one has a `mobile: { ... }` override for viewports up to 768px.
 ## Install
 
 ```bash
-npm install gsap pi-motion
+npm install gsap github:playinteractive-it/pi-motion#v0.1.0
 ```
 
 GSAP **3.13 or newer** is required (SplitText is free from that version). GSAP is a peer dependency and is not bundled; it is distributed under its own [license](https://gsap.com/standard-license/).
@@ -36,6 +36,8 @@ document.addEventListener('DOMContentLoaded', () => {
 ```
 
 Full parameter reference: [docs/reference.md](docs/reference.md).
+
+Website: [pimotion.playinteractive.it](https://pimotion.playinteractive.it)
 
 ## License
 
