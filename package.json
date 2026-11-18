@@ -7,6 +7,14 @@
   "exports": "./pi-motion.js",
   "files": ["pi-motion.js", "docs", "README.md", "LICENSE"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/playinteractive-it/pi-motion.git"
+  },
+  "homepage": "https://github.com/playinteractive-it/pi-motion#readme",
+  "bugs": {
+    "url": "https://github.com/playinteractive-it/pi-motion/issues"
+  },
   "keywords": ["gsap", "scrolltrigger", "splittext", "animation", "scroll", "parallax", "motion"],
   "peerDependencies": {
     "gsap": ">=3.13.0"
