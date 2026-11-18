@@ -1,0 +1,14 @@
+{
+  "name": "pi-motion",
+  "version": "0.1.0",
+  "description": "Declarative scroll motion engine driven by HTML attributes (GSAP + ScrollTrigger + SplitText).",
+  "type": "module",
+  "main": "pi-motion.js",
+  "exports": "./pi-motion.js",
+  "files": ["pi-motion.js", "docs", "README.md", "LICENSE"],
+  "license": "MIT",
+  "keywords": ["gsap", "scrolltrigger", "splittext", "animation", "scroll", "parallax", "motion"],
+  "peerDependencies": {
+    "gsap": ">=3.13.0"
+  }
+}
