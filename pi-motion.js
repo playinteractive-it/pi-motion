@@ -110,14 +110,19 @@ gsap.registerPlugin(ScrollTrigger, SplitText);
  *   The text is split into characters and each one follows the scroll
  *   velocity along a smooth curve, so the left side seems to move first
  *   and the right side catches up. Everything settles back by itself when
- *   the scroll stops. Vertical page scroll only (for now).
- *   "curve: s|arc (default s) - s: left leads, right follows through a
+ *   the scroll stops. Works for a vertical page scroll (default) and for a
+ *   text carried sideways by a horizontal track (axis: x).
+ *   "axis: y|x (default y) - y: the page scrolls vertically, the curve runs left
+ *    to right and the parts move up and down; x: the text is carried sideways,
+ *    the curve runs top to bottom and the parts move left and right (it needs
+ *    several lines to show a curve);
+ *    curve: s|arc (default s) - s: left leads, right follows through a
  *    smooth S; arc: both ends stay together, the middle trails;
- *    amount: <px>|<n>em (default 0.35em) - maximum displacement; em scales
+ *    amount: <px>|<n>em (default 0.35em, 0.5em with axis: x) - maximum displacement; em scales
  *    with the element's font size (a number is px);
  *    smooth: <s> (default 0.25) - how quickly it follows the scroll speed;
  *    lag: <n> (default 1) - extra delay of the right side (0 = none);
- *    ref: <px/s> (default 500) - scroll speed at which the effect reaches
+ *    ref: <px/s> (default 500, 250 with axis: x) - scroll speed at which the effect reaches
  *    about 75% of the amount (it saturates, so `amount` is the true maximum);
  *    split: chars|words (default chars); max: <n> (default 400) - above this
  *    many parts the effect falls back to words, then skips itself;
@@ -872,6 +877,9 @@ export const PiMotion = (() => {
     const velocity = ((y - flowLastY) / dt) * 1000; // px/s, positive = scrolling down
     flowLastY = y;
 
+    // Reads first, writes after, so several flows never force the layout twice.
+    flowRunners.forEach((runner) => { if (runner.read) runner.read(dt); });
+
     let busy = false;
     flowRunners.forEach((runner) => {
       if (runner.update(velocity, dt)) busy = true;
@@ -913,15 +921,21 @@ export const PiMotion = (() => {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
     const curve = cfg.curve === 'arc' ? 'arc' : 's';
+    // axis: y (default) = the page scrolls vertically, the curve runs left to right
+    // and the parts move up and down. axis: x = the text is carried sideways (a
+    // horizontal track), the curve runs top to bottom and the parts move left and right.
+    const horizontal = cfg.axis === 'x';
     const smooth = typeof cfg.smooth === 'number' && cfg.smooth > 0 ? cfg.smooth : 0.25;
     const lag = typeof cfg.lag === 'number' && cfg.lag >= 0 ? cfg.lag : 1;
-    const ref = typeof cfg.ref === 'number' && cfg.ref > 0 ? cfg.ref : 500;
+    // A sideways track usually moves slower than the scroll that drives it, so its
+    // defaults are a little stronger: the same scroll gives it less speed to react to.
+    const ref = typeof cfg.ref === 'number' && cfg.ref > 0 ? cfg.ref : (horizontal ? 250 : 500);
     // `amount` is px (a number) or em (a string such as "0.4em", scaled by the
     // element's font size, so a big headline and a small paragraph both get
     // a displacement that looks proportionate).
     const readAmount = () => {
       if (typeof cfg.amount === 'number') return cfg.amount;
-      const em = typeof cfg.amount === 'string' && /^-?\d*\.?\d+em$/.test(cfg.amount) ? parseFloat(cfg.amount) : 0.35;
+      const em = typeof cfg.amount === 'string' && /^-?\d*\.?\d+em$/.test(cfg.amount) ? parseFloat(cfg.amount) : (horizontal ? 0.5 : 0.35);
       return em * (parseFloat(getComputedStyle(el).fontSize) || 16);
     };
     const maxParts = typeof cfg.max === 'number' && cfg.max > 0 ? cfg.max : 400;
@@ -955,44 +969,58 @@ export const PiMotion = (() => {
       }
 
       const count = parts.length;
-      const setY = parts.map((part) => gsap.quickSetter(part, 'y', 'px'));
+      const setMove = parts.map((part) => gsap.quickSetter(part, horizontal ? 'x' : 'y', 'px'));
       const state = new Float32Array(count);
       const weight = new Float32Array(count); // position along the curve, 0..1
       let amountPx = readAmount();
       let moving = false;
       let inView = false;
 
-      // Where every part sits along the curve. Horizontal position inside the
-      // element (0 left, 1 right) shaped by the curve: `s` eases from 0 to 1,
-      // `arc` rises to 1 in the middle and returns to 0.
+      // Where every part sits along the curve: its position across the element,
+      // 0 to 1 (left to right for a vertical scroll, top to bottom for a sideways
+      // one), shaped by the curve: `s` eases from 0 to 1, `arc` rises to 1 in the
+      // middle and returns to 0.
       const measure = () => {
         amountPx = readAmount();
         const box = el.getBoundingClientRect();
-        const width = box.width || 1;
+        const size = (horizontal ? box.height : box.width) || 1;
         for (let i = 0; i < count; i += 1) {
           const r = parts[i].getBoundingClientRect();
-          const n = clamp((r.left + r.width / 2 - box.left) / width, 0, 1);
+          const n = clamp(horizontal
+            ? (r.top + r.height / 2 - box.top) / size
+            : (r.left + r.width / 2 - box.left) / size, 0, 1);
           weight[i] = curve === 'arc' ? Math.sin(Math.PI * n) : smoothstep(n);
         }
       };
 
       const reset = () => {
-        for (let i = 0; i < count; i += 1) setY[i](0);
+        for (let i = 0; i < count; i += 1) setMove[i](0);
         state.fill(0);
         moving = false;
       };
 
-      const trigger = ScrollTrigger.create({
-        trigger: el,
-        start: 'top bottom',
-        end: 'bottom top',
-        onToggle: (self) => { inView = self.isActive; }
-      });
-      inView = trigger.isActive;
       measure();
       ScrollTrigger.addEventListener('refresh', measure);
 
+      // Sideways, the speed is not the page's: it is how fast the element itself
+      // crosses the screen (it rides a track moved by a tween or by a sideways scroll).
+      let lastLeft = null;
+      let ownVelocity = 0;
+
       const runner = {
+        read: (dt) => {
+          // Visibility is measured on the screen, not on the page: inside a pinned
+          // section the page position of the text stays frozen while the text moves.
+          const r = el.getBoundingClientRect();
+          inView = r.bottom > 0 && r.top < window.innerHeight && r.right > 0 && r.left < window.innerWidth;
+          if (!horizontal) return;
+          if (!inView) { lastLeft = null; ownVelocity = 0; return; }
+          // Positive = scrolling forward, i.e. the content moves to the left. Softened
+          // a little, because a track that moves in steps would make it flicker.
+          const raw = lastLeft === null ? 0 : -((r.left - lastLeft) / dt) * 1000;
+          ownVelocity += (raw - ownVelocity) * 0.4;
+          lastLeft = r.left;
+        },
         update: (velocity, dt) => {
           if (!inView) {
             if (moving) reset();
@@ -1000,7 +1028,7 @@ export const PiMotion = (() => {
           }
           // Soft saturation: a calm scroll already gives a clear effect and a
           // fling never goes past `amount`.
-          const target = Math.tanh(velocity / ref);
+          const target = Math.tanh((horizontal ? ownVelocity : velocity) / ref);
           if (!moving && Math.abs(target) < 0.002) return false;
 
           const base = 1 - Math.exp(-dt / (smooth * 1000));
@@ -1011,7 +1039,7 @@ export const PiMotion = (() => {
             // scroll speed, so it also settles later once the scroll stops.
             state[i] += (target - state[i]) * (base / (1 + lag * w));
             const u = state[i];
-            setY[i](curve === 'arc' ? u * amountPx * w : -u * amountPx * (1 - w));
+            setMove[i](curve === 'arc' ? u * amountPx * w : -u * amountPx * (1 - w));
             const a = Math.abs(u);
             if (a > peak) peak = a;
           }
@@ -1027,6 +1055,7 @@ export const PiMotion = (() => {
           smooth,
           lag,
           curve,
+          axis: horizontal ? 'x' : 'y',
           inView,
           moving,
           peak: state.reduce((m, v) => Math.max(m, Math.abs(v)), 0),

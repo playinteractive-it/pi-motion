@@ -28,7 +28,7 @@ document.addEventListener('DOMContentLoaded', () => {
 - `PiMotion.init(scope?)` — scans `scope` (default `document.body`) for `[pi-animate]`, `[pi-scroll]`, `[pi-stack]`, `[pi-pin]`, `[pi-flow]` and wires them up. Call once, after the target DOM exists. Calling it again (e.g. after fonts load, or on a new SPA route) is safe and self-cleaning — it reverts the previous setup internally before rebuilding.
 - `PiMotion.destroy()` — reverts everything (ScrollTriggers, pins, SplitText instances). `init()` already calls this internally at the start of every run, so you only need to call it yourself when you want to tear everything down **without** immediately calling `init()` again (e.g. leaving a page for good in an SPA).
 - `PiMotion.refresh()` — recomputes every ScrollTrigger's start/end position and every fill-mode parallax delta, without re-splitting text or rebuilding triggers. Call it after a layout change ScrollTrigger's own resize observer won't catch on its own: a lazy-loaded image finishing decode, an accordion or tab panel opening, content injected via AJAX. A plain browser window resize already triggers this automatically — you don't need to call it for that.
-- `PiMotion.flowStats()` — a diagnostic for `[pi-flow]`, meant for the browser console. Returns `{ braked, ticker, frameAvgMs, runners }`: `braked` is `true` once the safety brake has switched the effect off (see [`[pi-flow]`](#pi-flow--fluid-lag-across-a-text)), `ticker` tells whether the shared scroll loop is running, and every entry of `runners` reports one text with its `parts`, `amountPx`, `curve`, `ref`, `smooth`, `lag`, whether it is `inView`, whether it is `moving` and its current `peak` (0 to 1).
+- `PiMotion.flowStats()` — a diagnostic for `[pi-flow]`, meant for the browser console. Returns `{ braked, ticker, frameAvgMs, runners }`: `braked` is `true` once the safety brake has switched the effect off (see [`[pi-flow]`](#pi-flow--fluid-lag-across-a-text)), `ticker` tells whether the shared scroll loop is running, and every entry of `runners` reports one text with its `parts`, `amountPx`, `axis`, `curve`, `ref`, `smooth`, `lag`, whether it is `inView`, whether it is `moving` and its current `peak` (0 to 1).
 
 ## Config syntax
 
@@ -428,21 +428,42 @@ How it behaves:
 
 - **It reacts to scroll *speed*, not to position.** A slow scroll gives a slight lag, a quick flick a clear one, and a still page none. To judge it, scroll fast.
 - **It follows whatever scrolls the page.** It reads the page's scroll position on every frame, so it works with native scrolling and with smooth-scroll libraries such as Lenis.
-- **Vertical page scroll only (for now).** Texts carried sideways by a horizontal track are not supported yet.
+- **Vertical or sideways.** By default the page scrolls vertically (`axis: y`). For a text carried sideways by a horizontal track use `axis: x`: see [Sideways](#sideways-axis-x) below.
 - **Experimental.** It is new: try it on headings and short paragraphs first.
 
 ### Parameters
 
 | Param | Default | Meaning |
 |---|---|---|
+| `axis` | `y` | Direction of the movement. `y`: the page scrolls vertically, the curve runs from left to right and the characters move up and down. `x`: the text is carried sideways, the curve runs from top to bottom and the characters move left and right. |
 | `curve` | `s` | Shape of the lag. `s`: the left side leads and the right side follows through a smooth S. `arc`: the two ends stay together and the middle trails behind. |
-| `amount` | `0.35em` | Maximum displacement. A number is px (`amount: 20`); a number followed by `em` (`amount: 0.5em`) scales with the element's font size, so a large headline and a small paragraph both get a proportionate effect. This is the real maximum: the effect never goes beyond it. |
-| `ref` | `500` | Scroll speed, in px/s, at which the effect reaches about 75% of `amount`. Lower it to see the effect at calmer scroll speeds. |
+| `amount` | `0.35em` (`0.5em` with `axis: x`) | Maximum displacement. A number is px (`amount: 20`); a number followed by `em` (`amount: 0.5em`) scales with the element's font size, so a large headline and a small paragraph both get a proportionate effect. This is the real maximum: the effect never goes beyond it. |
+| `ref` | `500` (`250` with `axis: x`) | Speed, in px/s, at which the effect reaches about 75% of `amount`. Lower it to see the effect at calmer speeds. A sideways track usually moves slower than the scroll that drives it, which is why its default is lower. |
 | `smooth` | `0.25` | Seconds the characters take to follow the scroll speed. Higher is softer and slower to settle. |
 | `lag` | `1` | Extra delay along the curve: the further a character is along it, the later it follows and the later it settles. `0` makes every character follow at the same pace. |
 | `split` | `chars` | `chars` \| `words`. Words are lighter on long texts and give a coarser curve. |
 | `max` | `400` | Largest number of parts to animate. Above it the effect falls back to words, and if the words are still more than `max` it skips the element with a console warning. |
 | `disable` | `false` | Skips the effect on this element. Mostly useful inside `mobile: { disable: true }`. |
+
+### Sideways (`axis: x`)
+
+When a text is carried sideways, for example inside a horizontal track in a pinned section (see [Horizontal scroll](#horizontal-scroll-horizontal)), set `axis: x`. The lag then runs the other way: with `curve: s` the top of the text leaves first and the bottom follows; with `curve: arc` the top and the bottom stay together and the middle trails.
+
+```html
+<section id="story" pi-pin="end: +=2600">
+  <div class="track"
+       pi-scroll="type: parallax; axis: x; fill: true; target: '#story'; start: top top; end: +=2600">
+    <p pi-flow="axis: x; curve: s">A block of text that crosses the screen sideways.</p>
+    <p pi-flow="axis: x; curve: s">Another block, carried by the same track.</p>
+  </div>
+</section>
+```
+
+- **The speed is measured on the text itself**: how fast the element crosses the screen, so it works with a track moved by `pi-scroll` and with any other sideways movement.
+- **Prefer `curve: s` sideways.** With `arc` the first and the last line move almost the same and only the middle ones stand out, which is hard to see on a few lines.
+- **It needs several lines.** The curve runs across the height of the text: on a single line every character is at the same height, so there is no curve, only the whole line trailing a little. Use blocks of three or four lines, or a large font size.
+- **Only while the text is on screen.** Visibility is measured where the text actually is on the screen, so it also works inside a pinned section, and a block that is off to the side does no work.
+- **On phones** a horizontal track is usually switched off, so add `mobile: { disable: true }` to the `pi-flow` as well, for example `pi-flow="axis: x; mobile: { disable: true }"`.
 
 ### Getting a visible effect
 
