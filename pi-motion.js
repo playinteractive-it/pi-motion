@@ -106,11 +106,33 @@ gsap.registerPlugin(ScrollTrigger, SplitText);
  *   engages - the reveal can look already finished by the time the
  *   section locks into view, or vanish for good with `reverse: true`.
  *
+ * [pi-flow] - fluid lag across a text while the page scrolls (experimental).
+ *   The text is split into characters and each one follows the scroll
+ *   velocity along a smooth curve, so the left side seems to move first
+ *   and the right side catches up. Everything settles back by itself when
+ *   the scroll stops. Vertical page scroll only (for now).
+ *   "curve: s|arc (default s) - s: left leads, right follows through a
+ *    smooth S; arc: both ends stay together, the middle trails;
+ *    amount: <px>|<n>em (default 0.35em) - maximum displacement; em scales
+ *    with the element's font size (a number is px);
+ *    smooth: <s> (default 0.25) - how quickly it follows the scroll speed;
+ *    lag: <n> (default 1) - extra delay of the right side (0 = none);
+ *    ref: <px/s> (default 500) - scroll speed at which the effect reaches
+ *    about 75% of the amount (it saturates, so `amount` is the true maximum);
+ *    split: chars|words (default chars); max: <n> (default 400) - above this
+ *    many parts the effect falls back to words, then skips itself;
+ *    disable: true|false; mobile: { ...overrides }"
+ *   Safety: it only runs while the element is on screen and the page is
+ *   moving, it is skipped under prefers-reduced-motion, and it switches
+ *   itself off for good if the frame rate drops.
+ *
  * PiMotion.refresh() - recomputes all ScrollTrigger positions and
  *   fill-mode parallax deltas. Call it after a layout change ScrollTrigger
  *   can't detect on its own (lazy-loaded images, accordions/tabs, content
  *   injected via AJAX). It does not re-run SplitText.
  *
+ * PiMotion.flowStats() - diagnostic for [pi-flow]: { braked, ticker, frameAvgMs,
+ *   runners }. Handy in the browser console to see what each flow is doing. *
  * Web fonts + `split: lines`: SplitText measures line breaks against the
  *   layout at the moment it runs. If custom fonts swap in after `init()`
  *   (FOUT/FOIT), lines split before the swap can be wrong. Re-run
@@ -825,6 +847,212 @@ export const PiMotion = (() => {
   };
 
   /**
+   * 5. Flow - velocity-driven lag across a text (see the file-level doc).
+   * One shared ticker measures the scroll velocity and feeds every running
+   * flow; each flow only does work while its element is on screen and
+   * something is still moving.
+   */
+  const FLOW_MAX_FRAME_MS = 45;
+  const flowRunners = new Set();
+  let flowTickerOn = false;
+  let flowLastY = 0;
+  let flowLastTime = 0;
+  let flowFrameAvg = 16.7;
+  let flowBusyFrames = 0;
+  let flowBraked = false;
+
+  const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+  const smoothstep = (n) => n * n * (3 - 2 * n);
+
+  const flowTick = () => {
+    const now = performance.now();
+    const dt = clamp(now - flowLastTime, 1, 100);
+    flowLastTime = now;
+    const y = window.scrollY;
+    const velocity = ((y - flowLastY) / dt) * 1000; // px/s, positive = scrolling down
+    flowLastY = y;
+
+    let busy = false;
+    flowRunners.forEach((runner) => {
+      if (runner.update(velocity, dt)) busy = true;
+    });
+
+    if (!busy) {
+      flowBusyFrames = 0;
+      flowFrameAvg = 16.7;
+      return;
+    }
+
+    // Safety brake: if the frames get slow while flows are working, switch
+    // them all off until the page is reloaded rather than make it worse.
+    flowBusyFrames += 1;
+    flowFrameAvg += (dt - flowFrameAvg) * 0.1;
+    if (flowBusyFrames > 60 && flowFrameAvg > FLOW_MAX_FRAME_MS) {
+      flowBraked = true;
+      console.warn('[PiMotion] pi-flow switched itself off: the page is running too slowly.');
+      flowRunners.forEach((runner) => runner.stop());
+    }
+  };
+
+  const startFlowTicker = () => {
+    if (flowTickerOn) return;
+    flowTickerOn = true;
+    flowLastY = window.scrollY;
+    flowLastTime = performance.now();
+    gsap.ticker.add(flowTick);
+  };
+
+  const stopFlowTickerIfIdle = () => {
+    if (flowRunners.size > 0 || !flowTickerOn) return;
+    flowTickerOn = false;
+    gsap.ticker.remove(flowTick);
+  };
+
+  const createFlow = (el, cfg, env) => {
+    if (cfg.disable === true || flowBraked) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    const curve = cfg.curve === 'arc' ? 'arc' : 's';
+    const smooth = typeof cfg.smooth === 'number' && cfg.smooth > 0 ? cfg.smooth : 0.25;
+    const lag = typeof cfg.lag === 'number' && cfg.lag >= 0 ? cfg.lag : 1;
+    const ref = typeof cfg.ref === 'number' && cfg.ref > 0 ? cfg.ref : 500;
+    // `amount` is px (a number) or em (a string such as "0.4em", scaled by the
+    // element's font size, so a big headline and a small paragraph both get
+    // a displacement that looks proportionate).
+    const readAmount = () => {
+      if (typeof cfg.amount === 'number') return cfg.amount;
+      const em = typeof cfg.amount === 'string' && /^-?\d*\.?\d+em$/.test(cfg.amount) ? parseFloat(cfg.amount) : 0.35;
+      return em * (parseFloat(getComputedStyle(el).fontSize) || 16);
+    };
+    const maxParts = typeof cfg.max === 'number' && cfg.max > 0 ? cfg.max : 400;
+    const wantWords = cfg.split === 'words';
+
+    runWhenTextReady(el, env, () => {
+      // Reuse a split another effect already made on this element (e.g.
+      // text-reveal), otherwise make our own.
+      let split = splitRegistry.get(el);
+      let ownSplit = false;
+      if (!split) {
+        split = new SplitText(el, { type: 'words,chars', tag: 'span' });
+        splitRegistry.set(el, split);
+        ownSplit = true;
+      }
+
+      let parts = wantWords ? split.words : split.chars;
+      if (!parts || parts.length === 0 || parts.length > maxParts) parts = split.words;
+      if (!parts || parts.length === 0 || parts.length > maxParts) {
+        if (ownSplit) {
+          split.revert();
+          splitRegistry.delete(el);
+        }
+        console.warn(`[PiMotion] pi-flow skipped: the text has more than ${maxParts} parts. Raise "max" or shorten the text.`, el);
+        return;
+      }
+
+      if (ownSplit) {
+        gsap.set(split.words, { display: 'inline-block', whiteSpace: 'nowrap' });
+        if (parts === split.chars) gsap.set(parts, { display: 'inline-block' });
+      }
+
+      const count = parts.length;
+      const setY = parts.map((part) => gsap.quickSetter(part, 'y', 'px'));
+      const state = new Float32Array(count);
+      const weight = new Float32Array(count); // position along the curve, 0..1
+      let amountPx = readAmount();
+      let moving = false;
+      let inView = false;
+
+      // Where every part sits along the curve. Horizontal position inside the
+      // element (0 left, 1 right) shaped by the curve: `s` eases from 0 to 1,
+      // `arc` rises to 1 in the middle and returns to 0.
+      const measure = () => {
+        amountPx = readAmount();
+        const box = el.getBoundingClientRect();
+        const width = box.width || 1;
+        for (let i = 0; i < count; i += 1) {
+          const r = parts[i].getBoundingClientRect();
+          const n = clamp((r.left + r.width / 2 - box.left) / width, 0, 1);
+          weight[i] = curve === 'arc' ? Math.sin(Math.PI * n) : smoothstep(n);
+        }
+      };
+
+      const reset = () => {
+        for (let i = 0; i < count; i += 1) setY[i](0);
+        state.fill(0);
+        moving = false;
+      };
+
+      const trigger = ScrollTrigger.create({
+        trigger: el,
+        start: 'top bottom',
+        end: 'bottom top',
+        onToggle: (self) => { inView = self.isActive; }
+      });
+      inView = trigger.isActive;
+      measure();
+      ScrollTrigger.addEventListener('refresh', measure);
+
+      const runner = {
+        update: (velocity, dt) => {
+          if (!inView) {
+            if (moving) reset();
+            return false;
+          }
+          // Soft saturation: a calm scroll already gives a clear effect and a
+          // fling never goes past `amount`.
+          const target = Math.tanh(velocity / ref);
+          if (!moving && Math.abs(target) < 0.002) return false;
+
+          const base = 1 - Math.exp(-dt / (smooth * 1000));
+          let peak = 0;
+          for (let i = 0; i < count; i += 1) {
+            const w = weight[i];
+            // The further along the curve, the slower the part follows the
+            // scroll speed, so it also settles later once the scroll stops.
+            state[i] += (target - state[i]) * (base / (1 + lag * w));
+            const u = state[i];
+            setY[i](curve === 'arc' ? u * amountPx * w : -u * amountPx * (1 - w));
+            const a = Math.abs(u);
+            if (a > peak) peak = a;
+          }
+          moving = peak > 0.002;
+          if (!moving) reset();
+          return true;
+        },
+        stop: reset,
+        stats: () => ({
+          parts: count,
+          amountPx,
+          ref,
+          smooth,
+          lag,
+          curve,
+          inView,
+          moving,
+          peak: state.reduce((m, v) => Math.max(m, Math.abs(v)), 0),
+          weights: [weight[0], weight[count >> 1], weight[count - 1]]
+        })
+      };
+
+      flowRunners.add(runner);
+      startFlowTicker();
+
+      env.cleanups.add(() => {
+        flowRunners.delete(runner);
+        ScrollTrigger.removeEventListener('refresh', measure);
+        reset();
+        stopFlowTickerIfIdle();
+      });
+    });
+  };
+
+  const releaseEnv = (env) => {
+    env.pending.forEach((observer) => observer.disconnect());
+    env.cleanups.forEach((fn) => fn());
+    env.cleanups.clear();
+  };
+
+  /**
    * Main Lifecycle orchestrator with gsap.matchMedia()
    */
   const init = (scope = document.body) => {
@@ -835,10 +1063,11 @@ export const PiMotion = (() => {
     const scrollElements = gsap.utils.toArray('[pi-scroll]', scope);
     const stackElements = gsap.utils.toArray('[pi-stack]', scope);
     const pinElements = gsap.utils.toArray('[pi-pin]', scope);
+    const flowElements = gsap.utils.toArray('[pi-flow]', scope);
 
     // Desktop Setup
     mm.add(DESKTOP_BREAKPOINT, (ctx) => {
-      const env = { ctx, pending: new Set() };
+      const env = { ctx, pending: new Set(), cleanups: new Set() };
       revealElements.forEach((el) => {
         const config = parseConfig(el.getAttribute('pi-animate'));
         createReveal(el, config, env);
@@ -859,13 +1088,18 @@ export const PiMotion = (() => {
         createPin(el, config);
       });
 
+      flowElements.forEach((el) => {
+        const config = parseConfig(el.getAttribute('pi-flow'));
+        createFlow(el, config, env);
+      });
+
       // Runs when this breakpoint stops matching or on destroy().
-      return () => env.pending.forEach((observer) => observer.disconnect());
+      return () => releaseEnv(env);
     });
 
     // Mobile Setup (Overrides applied)
     mm.add(MOBILE_BREAKPOINT, (ctx) => {
-      const env = { ctx, pending: new Set() };
+      const env = { ctx, pending: new Set(), cleanups: new Set() };
       revealElements.forEach((el) => {
         const baseConfig = parseConfig(el.getAttribute('pi-animate'));
         const mobileConfig = { ...baseConfig, ...(baseConfig.mobile || {}) };
@@ -890,8 +1124,14 @@ export const PiMotion = (() => {
         createPin(el, mobileConfig);
       });
 
+      flowElements.forEach((el) => {
+        const baseConfig = parseConfig(el.getAttribute('pi-flow'));
+        const mobileConfig = { ...baseConfig, ...(baseConfig.mobile || {}) };
+        createFlow(el, mobileConfig, env);
+      });
+
       // Runs when this breakpoint stops matching or on destroy().
-      return () => env.pending.forEach((observer) => observer.disconnect());
+      return () => releaseEnv(env);
     });
   };
 
@@ -917,5 +1157,13 @@ export const PiMotion = (() => {
    */
   const refresh = () => ScrollTrigger.refresh();
 
-  return { init, destroy, refresh };
+  // Development aid: what every running pi-flow currently uses and is doing.
+  const flowStats = () => ({
+    braked: flowBraked,
+    ticker: flowTickerOn,
+    frameAvgMs: Math.round(flowFrameAvg * 10) / 10,
+    runners: [...flowRunners].map((runner) => runner.stats())
+  });
+
+  return { init, destroy, refresh, flowStats };
 })();

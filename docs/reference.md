@@ -25,9 +25,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 ```
 
-- `PiMotion.init(scope?)` — scans `scope` (default `document.body`) for `[pi-animate]`, `[pi-scroll]`, `[pi-stack]`, `[pi-pin]` and wires them up. Call once, after the target DOM exists. Calling it again (e.g. after fonts load, or on a new SPA route) is safe and self-cleaning — it reverts the previous setup internally before rebuilding.
+- `PiMotion.init(scope?)` — scans `scope` (default `document.body`) for `[pi-animate]`, `[pi-scroll]`, `[pi-stack]`, `[pi-pin]`, `[pi-flow]` and wires them up. Call once, after the target DOM exists. Calling it again (e.g. after fonts load, or on a new SPA route) is safe and self-cleaning — it reverts the previous setup internally before rebuilding.
 - `PiMotion.destroy()` — reverts everything (ScrollTriggers, pins, SplitText instances). `init()` already calls this internally at the start of every run, so you only need to call it yourself when you want to tear everything down **without** immediately calling `init()` again (e.g. leaving a page for good in an SPA).
 - `PiMotion.refresh()` — recomputes every ScrollTrigger's start/end position and every fill-mode parallax delta, without re-splitting text or rebuilding triggers. Call it after a layout change ScrollTrigger's own resize observer won't catch on its own: a lazy-loaded image finishing decode, an accordion or tab panel opening, content injected via AJAX. A plain browser window resize already triggers this automatically — you don't need to call it for that.
+- `PiMotion.flowStats()` — a diagnostic for `[pi-flow]`, meant for the browser console. Returns `{ braked, ticker, frameAvgMs, runners }`: `braked` is `true` once the safety brake has switched the effect off (see [`[pi-flow]`](#pi-flow--fluid-lag-across-a-text)), `ticker` tells whether the shared scroll loop is running, and every entry of `runners` reports one text with its `parts`, `amountPx`, `curve`, `ref`, `smooth`, `lag`, whether it is `inView`, whether it is `moving` and its current `peak` (0 to 1).
 
 ## Config syntax
 
@@ -412,6 +413,51 @@ Disable pinning on mobile:
 ```html
 <section pi-pin="end: +=1200; mobile: { disable: true }">
 ```
+
+---
+
+## `[pi-flow]` — fluid lag across a text
+
+While the page scrolls, the characters of a text do not move rigidly: each one follows the scroll speed along a smooth curve, so one side seems to move first and the other catches up a moment later, as if the two sides were not perfectly in step. When the scroll stops everything settles back in place by itself, and at rest nothing is displaced.
+
+```html
+<h2 pi-flow="curve: s">Both sides move together, never quite in step.</h2>
+```
+
+How it behaves:
+
+- **It reacts to scroll *speed*, not to position.** A slow scroll gives a slight lag, a quick flick a clear one, and a still page none. To judge it, scroll fast.
+- **It follows whatever scrolls the page.** It reads the page's scroll position on every frame, so it works with native scrolling and with smooth-scroll libraries such as Lenis.
+- **Vertical page scroll only (for now).** Texts carried sideways by a horizontal track are not supported yet.
+- **Experimental.** It is new: try it on headings and short paragraphs first.
+
+### Parameters
+
+| Param | Default | Meaning |
+|---|---|---|
+| `curve` | `s` | Shape of the lag. `s`: the left side leads and the right side follows through a smooth S. `arc`: the two ends stay together and the middle trails behind. |
+| `amount` | `0.35em` | Maximum displacement. A number is px (`amount: 20`); a number followed by `em` (`amount: 0.5em`) scales with the element's font size, so a large headline and a small paragraph both get a proportionate effect. This is the real maximum: the effect never goes beyond it. |
+| `ref` | `500` | Scroll speed, in px/s, at which the effect reaches about 75% of `amount`. Lower it to see the effect at calmer scroll speeds. |
+| `smooth` | `0.25` | Seconds the characters take to follow the scroll speed. Higher is softer and slower to settle. |
+| `lag` | `1` | Extra delay along the curve: the further a character is along it, the later it follows and the later it settles. `0` makes every character follow at the same pace. |
+| `split` | `chars` | `chars` \| `words`. Words are lighter on long texts and give a coarser curve. |
+| `max` | `400` | Largest number of parts to animate. Above it the effect falls back to words, and if the words are still more than `max` it skips the element with a console warning. |
+| `disable` | `false` | Skips the effect on this element. Mostly useful inside `mobile: { disable: true }`. |
+
+### Getting a visible effect
+
+- Raise `amount` first (try `0.6em` or `0.8em` on a large headline), then lower `ref` (try `300`) if it still looks timid at your usual scroll speed.
+- `smooth` and `lag` change how long the catch-up lasts after you stop scrolling: raise both for a longer, more fluid tail.
+- Choose `curve` last: `s` reads as one side leading the other, `arc` as the text bending in the middle.
+
+### Combining and limits
+
+- **With `pi-scroll="type: text-reveal"` on the same element** the two share one split and add up: the reveal changes opacity, the flow changes position.
+- **The text must exist.** Like the split types, it waits for text that is filled in after `init()` (i18n, CMS).
+- **Cost.** Only elements on screen are updated, and only while something is moving. Prefer headings and short paragraphs; long texts fall back to words and then to nothing because of `max`.
+- **Reduced motion.** Under `prefers-reduced-motion: reduce` the effect is skipped.
+- **Safety brake.** If frames stay slow while the effect is working, it switches itself off until the page is reloaded and logs a warning. `PiMotion.flowStats().braked` tells whether that happened.
+- **Mobile.** It accepts `mobile: { ... }` like every other attribute, for example `pi-flow="amount: 0.5em; mobile: { amount: 0.25em }"` or `mobile: { disable: true }`.
 
 ---
 
