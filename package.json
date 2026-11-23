@@ -1,6 +1,6 @@
 {
   "name": "pi-motion",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Declarative scroll motion engine driven by HTML attributes (GSAP + ScrollTrigger + SplitText).",
   "type": "module",
   "main": "pi-motion.js",
