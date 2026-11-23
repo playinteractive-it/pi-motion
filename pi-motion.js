@@ -151,6 +151,15 @@ export const PiMotion = (() => {
   // previous split before creating a new one, instead of splitting
   // already-split markup.
   const splitRegistry = new Map();
+  // SplitText's default `aria: 'auto'` puts an aria-label on the element and
+  // aria-hidden on every part. aria-label is prohibited on generic elements
+  // (div, p, ul...) and the aria-hidden parts strip the accessible name from
+  // any link/button inside. Keep 'auto' only for headings without interactive
+  // children; otherwise leave the markup untouched ('none').
+  const SPLIT_ARIA_HEADING = /^H[1-6]$/;
+  const SPLIT_ARIA_INTERACTIVE = 'a, button, input, select, textarea, [tabindex], [role]';
+  const splitAria = (el) =>
+    SPLIT_ARIA_HEADING.test(el.tagName) && !el.querySelector(SPLIT_ARIA_INTERACTIVE) ? 'auto' : 'none';
   // Horizontal (axis: x) parallax tweens by element, so a pi-scroll with
   // `horizontal` can find the tween that moves its ancestor (ScrollTrigger's
   // `containerAnimation`). Cleared on destroy().
@@ -313,7 +322,7 @@ export const PiMotion = (() => {
     }
 
     const splitType = cfg.split === 'lines' ? 'lines' : 'words';
-    const split = new SplitText(el, { type: splitType });
+    const split = new SplitText(el, { type: splitType, aria: splitAria(el) });
     const parts = splitType === 'lines' ? split.lines : split.words;
 
     // Nothing to animate (no text, or `lines` measured on an element with
@@ -624,7 +633,7 @@ export const PiMotion = (() => {
 
         // `tag: 'span'`: plain inline spans like a hand-made split (SplitText's
         // default is `div` + position:relative); the display is set below.
-        const split = new SplitText(el, { type: splitMode === 'chars' ? 'words,chars' : splitMode, tag: 'span' });
+        const split = new SplitText(el, { type: splitMode === 'chars' ? 'words,chars' : splitMode, tag: 'span', aria: splitAria(el) });
         const parts = split[splitMode];
         if (!parts || parts.length === 0) {
           split.revert();
@@ -947,7 +956,7 @@ export const PiMotion = (() => {
       let split = splitRegistry.get(el);
       let ownSplit = false;
       if (!split) {
-        split = new SplitText(el, { type: 'words,chars', tag: 'span' });
+        split = new SplitText(el, { type: 'words,chars', tag: 'span', aria: splitAria(el) });
         splitRegistry.set(el, split);
         ownSplit = true;
       }
